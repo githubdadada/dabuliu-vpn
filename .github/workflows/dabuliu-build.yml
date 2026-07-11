@@ -7,44 +7,156 @@ on:
       - 'dabuliu-v*'
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: android
-          - os: windows-2022
-            platform: windows
-          - os: macos-latest
-            platform: macos
-    runs-on: ${{ matrix.os }}
+  build-android:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24.0'
           cache-dependency-path: core/go.sum
+
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: 3.44.6
           channel: stable
           cache: true
-      - name: Configure Android toolchain
-        if: matrix.platform == 'android'
-        uses: nttld/setup-ndk@v1
+
+      - uses: nttld/setup-ndk@v1
         with:
           ndk-version: r28c
           add-to-path: true
           link-to-sdk: true
-      - name: Install Dart dependencies
+
+      - name: Install dependencies
         run: flutter pub get
-      - name: Build package
-        run: dart setup.dart ${{ matrix.platform }} --env stable -v
+
+      - name: Write env.json
+        run: |
+          echo '{"APP_ENV":"pre"}' > env.json
+
+      - name: Build Android APK
+        run: |
+          flutter build apk \
+            --release \
+            --dart-define-from-file=env.json \
+            --split-per-abi \
+            --verbose
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/*.apk dist/
+
       - uses: actions/upload-artifact@v4
         with:
-          name: dabuliu-vpn-${{ matrix.platform }}
+          name: dabuliu-vpn-android
           path: dist/
           if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: core/go.sum
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.6
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Write env.json
+        run: |
+          echo '{"APP_ENV":"pre"}' > env.json
+
+      - name: Install appdmg
+        run: npm install -g appdmg
+
+      - name: Build macOS
+        run: |
+          flutter build macos \
+            --release \
+            --dart-define-from-file=env.json \
+            --verbose
+
+      - name: Create DMG
+        run: |
+          mkdir -p dist
+          hdiutil create -volname "Dabuliu VPN" \
+            -srcfolder build/macos/Build/Products/Release/*.app \
+            -ov -format UDZO \
+            dist/Dabuliu-VPN-macos.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dabuliu-vpn-macos
+          path: dist/
+          if-no-files-found: warn
+
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: core/go.sum
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.6
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Go Core for Windows
+        working-directory: plugins/setup/buildkit/build_tool
+        run: dart run build_tool windows --root-dir ${{ github.workspace }}
+
+      - name: Read Core SHA256
+        id: core_sha
+        run: |
+          $json = Get-Content core_sha256.json | ConvertFrom-Json
+          echo "sha=$($json.CORE_SHA256)" >> $env:GITHUB_OUTPUT
+
+      - name: Write env.json
+        run: |
+          @"
+          {"APP_ENV":"pre","CORE_SHA256":"${{ steps.core_sha.outputs.sha }}"}
+          "@ | Out-File -Encoding utf8 env.json
+
+      - name: Build Windows
+        run: |
+          flutter build windows \
+            --release \
+            --dart-define-from-file=env.json \
+            --verbose
+
+      - name: Create ZIP
+        run: |
+          mkdir dist
+          Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\Dabuliu-VPN-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dabuliu-vpn-windows
+          path: dist/
+          if-no-files-found: warn
