@@ -1,0 +1,50 @@
+name: Dabuliu VPN cross-platform build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'dabuliu-v*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: android
+          - os: windows-2022
+            platform: windows
+          - os: macos-latest
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: core/go.sum
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.6
+          channel: stable
+          cache: true
+      - name: Configure Android toolchain
+        if: matrix.platform == 'android'
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28c
+          add-to-path: true
+          link-to-sdk: true
+      - name: Install Dart dependencies
+        run: flutter pub get
+      - name: Build package
+        run: dart setup.dart ${{ matrix.platform }} --env stable -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dabuliu-vpn-${{ matrix.platform }}
+          path: dist/
+          if-no-files-found: error
